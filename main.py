@@ -13,17 +13,15 @@ API_HASH = "884d4e8e52cf6752fff31a3040aed2a1"
 BOT_TOKEN = "8973355682:AAHxtXBfL6IehfWUCAdie_jQH36rA8nsLjU"
 OWNER_ID = 8900371852
 
-# Database Handling (SQLite Database)
+# SQLite Setup
 conn = sqlite3.connect("bot_data.db", check_same_thread=False)
 cursor = conn.cursor()
 
-# Create Tables if not exist
 cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
 cursor.execute("CREATE TABLE IF NOT EXISTS approved_groups (chat_id INTEGER PRIMARY KEY)")
 cursor.execute("CREATE TABLE IF NOT EXISTS cards (file_unique_id TEXT PRIMARY KEY, name TEXT, card_id TEXT, rarity TEXT, anime TEXT)")
 conn.commit()
 
-# Initialize Pyrogram Bot
 app = Client(
     "CheatBot",
     api_id=API_ID,
@@ -31,7 +29,7 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-# ================= Web Server (For Render Keep-Alive) =================
+# Web Server (Keep-Alive)
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -52,7 +50,6 @@ def keep_alive():
     t.daemon = True
     t.start()
 
-# Helper Function
 def format_card_response(card_data):
     name, card_id, rarity = card_data[1], card_data[2], card_data[3]
     name_parts = name.split()
@@ -73,7 +70,8 @@ def format_card_response(card_data):
     ])
     return text, keyboard
 
-# ================= Start Command =================
+# ================= Handlers =================
+
 @app.on_message(filters.command("start"))
 async def start_cmd(client: Client, message: Message):
     user_id = message.from_user.id
@@ -86,15 +84,12 @@ async def start_cmd(client: Client, message: Message):
     ])
     await message.reply_text(text, reply_markup=keyboard)
 
-# ================= Stats Command =================
 @app.on_message(filters.command("stats") & filters.user(OWNER_ID))
 async def stats_cmd(client: Client, message: Message):
     cursor.execute("SELECT COUNT(*) FROM users")
     total_users = cursor.fetchone()[0]
-    
     cursor.execute("SELECT COUNT(*) FROM approved_groups")
     total_groups = cursor.fetchone()[0]
-    
     cursor.execute("SELECT COUNT(*) FROM cards")
     total_cards = cursor.fetchone()[0]
     
@@ -106,75 +101,27 @@ async def stats_cmd(client: Client, message: Message):
     )
     await message.reply_text(stats_text)
 
-# ================= Broadcast Command =================
-@app.on_message(filters.command("broadcast") & filters.user(OWNER_ID))
-async def broadcast_cmd(client: Client, message: Message):
-    if not message.reply_to_message and len(message.command) < 2:
-        await message.reply_text("⚠️ Message ကို Reply ထောက်ပြီး `/broadcast` လို့ ရိုက်ပါ။")
-        return
-
-    status_msg = await message.reply_text("🚀 ကြော်ညာ ပို့ဆောင်နေပါပြီ...")
-    
-    cursor.execute("SELECT user_id FROM users")
-    users = cursor.fetchall()
-    
-    cursor.execute("SELECT chat_id FROM approved_groups")
-    groups = cursor.fetchall()
-
-    success_u, failed_u = 0, 0
-    success_g, failed_g = 0, 0
-
-    for u in users:
-        try:
-            if message.reply_to_message:
-                await message.reply_to_message.copy(u[0])
-            else:
-                await client.send_message(u[0], message.text.split(None, 1)[1])
-            success_u += 1
-            await asyncio.sleep(0.05)
-        except Exception:
-            failed_u += 1
-
-    for g in groups:
-        try:
-            if message.reply_to_message:
-                await message.reply_to_message.copy(g[0])
-            else:
-                await client.send_message(g[0], message.text.split(None, 1)[1])
-            success_g += 1
-            await asyncio.sleep(0.05)
-        except Exception:
-            failed_g += 1
-
-    await status_msg.edit_text(
-        f"✅ **Broadcast ပြီးစီးပါပြီ!**\n\n"
-        f"👤 Users: {success_u} အောင်မြင် | {failed_u} ကျရှုံး\n"
-        f"👥 Groups: {success_g} အောင်မြင် | {failed_g} ကျရှုံး"
-    )
-
-# ================= Approve Group =================
 @app.on_message(filters.command("approve") & filters.group)
 async def approve_group(client: Client, message: Message):
     if message.from_user.id != OWNER_ID:
         return
-    
     cursor.execute("INSERT OR IGNORE INTO approved_groups VALUES (?)", (message.chat.id,))
     conn.commit()
     await message.reply_text("✅ ဒီ Group ကို Auto Cheat ဖော်ပေးရန် Approve လုပ်လိုက်ပါပြီ။")
 
-# ================= Add Card (Owner) =================
 @app.on_message(filters.private & filters.user(OWNER_ID) & filters.photo)
 async def add_card_to_db(client: Client, message: Message):
     if not message.caption:
+        await message.reply_text("⚠️ Caption (စာသား) ပါသော Card ပုံကို ပို့ပေးပါ။")
         return
 
     file_unique_id = message.photo.file_unique_id
     caption = message.caption
     
-    name_m = re.search(r"👤 Name:\s*(.+)", caption)
-    id_m = re.search(r"🆔 ID:\s*(.+)", caption)
-    rarity_m = re.search(r"🏷 Rarity:\s*(.+)", caption)
-    anime_m = re.search(r"🌴 Anime:\s*(.+)", caption)
+    name_m = re.search(r"Name:\s*(.+)", caption, re.IGNORECASE)
+    id_m = re.search(r"ID:\s*(.+)", caption, re.IGNORECASE)
+    rarity_m = re.search(r"Rarity:\s*(.+)", caption, re.IGNORECASE)
+    anime_m = re.search(r"Anime:\s*(.+)", caption, re.IGNORECASE)
 
     if name_m:
         card_name = name_m.group(1).strip()
@@ -188,8 +135,9 @@ async def add_card_to_db(client: Client, message: Message):
         )
         conn.commit()
         await message.reply_text(f"✅ Card သိမ်းဆည်းပြီးပါပြီ!\n\n**Name:** {card_name}\n**ID:** {card_id}")
+    else:
+        await message.reply_text("⚠️ စာသားပုံစံ မမှန်ပါ။ '👤 Name:' ပါဝင်အောင် ပို့ပေးပါ။")
 
-# ================= Auto Group Card Finder =================
 @app.on_message(filters.group & filters.photo)
 async def auto_group_card_finder(client: Client, message: Message):
     cursor.execute("SELECT chat_id FROM approved_groups WHERE chat_id = ?", (message.chat.id,))
@@ -204,7 +152,6 @@ async def auto_group_card_finder(client: Client, message: Message):
         text, keyboard = format_card_response(card)
         await message.reply_text(text, reply_markup=keyboard, reply_to_message_id=message.id)
 
-# ================= Manual Group Check (.w) =================
 @app.on_message(filters.group & filters.regex(r"^\.w$"))
 async def manual_card_finder(client: Client, message: Message):
     user_id = message.from_user.id
@@ -230,7 +177,6 @@ async def manual_card_finder(client: Client, message: Message):
         text, keyboard = format_card_response(card)
         await message.reply_text(text, reply_markup=keyboard, reply_to_message_id=reply_msg.id)
 
-# ================= DM Photo Finder =================
 @app.on_message(filters.private & filters.photo)
 async def dm_card_finder(client: Client, message: Message):
     if message.from_user.id == OWNER_ID:
@@ -244,7 +190,6 @@ async def dm_card_finder(client: Client, message: Message):
         text, keyboard = format_card_response(card)
         await message.reply_text(text, reply_markup=keyboard)
 
-# ================= Async Main Execution =================
 async def main():
     keep_alive()
     print("Starting Bot...")
