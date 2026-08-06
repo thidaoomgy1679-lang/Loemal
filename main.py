@@ -1,10 +1,7 @@
 import os
 import re
-import asyncio
-import threading
 import sqlite3
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from pyrogram import Client, filters, idle
+from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 
 # ================= Configuration =================
@@ -23,32 +20,11 @@ cursor.execute("CREATE TABLE IF NOT EXISTS cards (file_unique_id TEXT PRIMARY KE
 conn.commit()
 
 app = Client(
-    "CheatBot",
+    "CheatBotSession",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
-
-# Web Server (Keep-Alive)
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"Bot is alive!")
-
-    def log_message(self, format, *args):
-        return
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    server.serve_forever()
-
-def keep_alive():
-    t = threading.Thread(target=run_web_server)
-    t.daemon = True
-    t.start()
 
 def format_card_response(card_data):
     name, card_id, rarity = card_data[1], card_data[2], card_data[3]
@@ -70,8 +46,7 @@ def format_card_response(card_data):
     ])
     return text, keyboard
 
-# ================= Handlers =================
-
+# ================= Start Command =================
 @app.on_message(filters.command("start"))
 async def start_cmd(client: Client, message: Message):
     user_id = message.from_user.id
@@ -84,6 +59,7 @@ async def start_cmd(client: Client, message: Message):
     ])
     await message.reply_text(text, reply_markup=keyboard)
 
+# ================= Stats Command =================
 @app.on_message(filters.command("stats") & filters.user(OWNER_ID))
 async def stats_cmd(client: Client, message: Message):
     cursor.execute("SELECT COUNT(*) FROM users")
@@ -101,6 +77,51 @@ async def stats_cmd(client: Client, message: Message):
     )
     await message.reply_text(stats_text)
 
+# ================= Broadcast Command =================
+@app.on_message(filters.command("broadcast") & filters.user(OWNER_ID))
+async def broadcast_cmd(client: Client, message: Message):
+    if not message.reply_to_message and len(message.command) < 2:
+        await message.reply_text("⚠️ Message ကို Reply ထောက်ပြီး `/broadcast` လို့ ရိုက်ပါ။")
+        return
+
+    status_msg = await message.reply_text("🚀 ကြော်ညာ ပို့ဆောင်နေပါပြီ...")
+    
+    cursor.execute("SELECT user_id FROM users")
+    users = cursor.fetchall()
+    
+    cursor.execute("SELECT chat_id FROM approved_groups")
+    groups = cursor.fetchall()
+
+    success_u, failed_u = 0, 0
+    success_g, failed_g = 0, 0
+
+    for u in users:
+        try:
+            if message.reply_to_message:
+                await message.reply_to_message.copy(u[0])
+            else:
+                await client.send_message(u[0], message.text.split(None, 1)[1])
+            success_u += 1
+        except Exception:
+            failed_u += 1
+
+    for g in groups:
+        try:
+            if message.reply_to_message:
+                await message.reply_to_message.copy(g[0])
+            else:
+                await client.send_message(g[0], message.text.split(None, 1)[1])
+            success_g += 1
+        except Exception:
+            failed_g += 1
+
+    await status_msg.edit_text(
+        f"✅ **Broadcast ပြီးစီးပါပြီ!**\n\n"
+        f"👤 Users: {success_u} | Failed: {failed_u}\n"
+        f"👥 Groups: {success_g} | Failed: {failed_g}"
+    )
+
+# ================= Approve Group =================
 @app.on_message(filters.command("approve") & filters.group)
 async def approve_group(client: Client, message: Message):
     if message.from_user.id != OWNER_ID:
@@ -109,6 +130,7 @@ async def approve_group(client: Client, message: Message):
     conn.commit()
     await message.reply_text("✅ ဒီ Group ကို Auto Cheat ဖော်ပေးရန် Approve လုပ်လိုက်ပါပြီ။")
 
+# ================= Add Card (Owner) =================
 @app.on_message(filters.private & filters.user(OWNER_ID) & filters.photo)
 async def add_card_to_db(client: Client, message: Message):
     if not message.caption:
@@ -138,6 +160,7 @@ async def add_card_to_db(client: Client, message: Message):
     else:
         await message.reply_text("⚠️ စာသားပုံစံ မမှန်ပါ။ '👤 Name:' ပါဝင်အောင် ပို့ပေးပါ။")
 
+# ================= Auto Group Card Finder =================
 @app.on_message(filters.group & filters.photo)
 async def auto_group_card_finder(client: Client, message: Message):
     cursor.execute("SELECT chat_id FROM approved_groups WHERE chat_id = ?", (message.chat.id,))
@@ -152,6 +175,7 @@ async def auto_group_card_finder(client: Client, message: Message):
         text, keyboard = format_card_response(card)
         await message.reply_text(text, reply_markup=keyboard, reply_to_message_id=message.id)
 
+# ================= Manual Group Check (.w) =================
 @app.on_message(filters.group & filters.regex(r"^\.w$"))
 async def manual_card_finder(client: Client, message: Message):
     user_id = message.from_user.id
@@ -177,6 +201,7 @@ async def manual_card_finder(client: Client, message: Message):
         text, keyboard = format_card_response(card)
         await message.reply_text(text, reply_markup=keyboard, reply_to_message_id=reply_msg.id)
 
+# ================= DM Photo Finder =================
 @app.on_message(filters.private & filters.photo)
 async def dm_card_finder(client: Client, message: Message):
     if message.from_user.id == OWNER_ID:
@@ -190,13 +215,6 @@ async def dm_card_finder(client: Client, message: Message):
         text, keyboard = format_card_response(card)
         await message.reply_text(text, reply_markup=keyboard)
 
-async def main():
-    keep_alive()
-    print("Starting Bot...")
-    await app.start()
-    print("Bot is successfully running!")
-    await idle()
-    await app.stop()
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    print("Bot is starting...")
+    app.run()
