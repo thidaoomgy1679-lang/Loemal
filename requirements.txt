@@ -1,4 +1,2 @@
-pyrogram
+pyrofork
 tgcrypto
-pymongo
-dnspython
